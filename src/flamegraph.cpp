@@ -27,7 +27,10 @@
 
 #include "flamegraph.h"
 
+#include <algorithm>
 #include <cmath>
+#include <map>
+#include <vector>
 
 #include <QAction>
 #include <QCheckBox>
@@ -43,6 +46,7 @@
 #include <QLineEdit>
 #include <QMenu>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollBar>
 #include <QStyleOption>
 #include <QToolTip>
@@ -664,6 +668,176 @@ void FlameGraph::saveSvg(const QString &fileName) const
 
     m_rootItem->setPen(oldPen);
     m_rootItem->setBrush(oldBrush);
+}
+
+void FlameGraph::saveHtml(const QString &fileName) const 
+{
+    if (!m_rootItem)
+        return;
+
+    QFile indexFile(QStringLiteral(":/html/index.html"));
+    indexFile.open(QIODevice::ReadOnly);
+    QString index = QString::fromUtf8(indexFile.readAll());
+    indexFile.close();
+
+    // Clear everything between BIN_SPLIT tags.
+    index = index.replace(QStringLiteral("\\/\\* BIN_SPLIT \\*\\/ \\-\\-\\>.*?\\<\\!\\-\\- \\/\\* BIN_SPLIT \\*\\/"),
+        QStringLiteral(""));
+
+    QFile vizFile(QStringLiteral(":/html/viz.js"));
+    vizFile.open(QIODevice::ReadOnly);
+    QString viz = QString::fromUtf8(vizFile.readAll());
+    vizFile.close();
+
+    // Substitute viz.js source into the resulting file.
+    index = index.replace(QStringLiteral("<script src=\"viz.js\"></script>"),
+        QStringLiteral("<script>") + viz + QStringLiteral("</script>"));
+
+    // TODO Format the profiling data for FlameBearer.
+    std::vector<std::vector<unsigned int> > stacks;
+    std::vector<QString> names;
+    std::map<QString, unsigned int> nameIds;
+
+    // Levels
+    // Entries in level
+    // 3 data points per each entry in level
+
+    // Parse the flamegraph.
+    for (;;) { // TODO for (const tick of log.ticks) {
+        std::vector<unsigned int> stack;
+        for (int i = 0;;) { // TODO for (let i = tick.s.length; i >= 0; i -= 2) {
+#if 1
+            // TODO const code = log.code[tick.s[i]];
+            // TODO const name = codeToName(code, sharedPath);
+	    const QString name = QStringLiteral("test");
+#else
+            auto m_symbol = FrameGraphicsItem::symbol();
+            const auto binary = Util::formatString(m_symbol.binary);
+            const auto symbol = Util::formatSymbol(m_symbol, false);
+            const auto name = symbol.isEmpty() ? QObject::tr("?? [%1]").arg(binary) : symbol;
+#endif
+	    auto& nameId = nameIds[name];
+            const auto& it = nameIds.find(name);
+            if (it == nameIds.end()) {
+                nameId = names.size();
+                names.push_back(name);
+            }
+            stack.push_back(nameId);
+        }
+
+        stacks.push_back(stack);
+    }
+
+    // Sort call stacks so that they can be merged top-down.
+    std::sort(stacks.begin(), stacks.end(), [](const std::vector<unsigned int>& a, const std::vector<unsigned int>& b) {
+        int size = std::min(a.size(), b.size());
+        for (int i = 0; i < size; i++) {
+            const int d = a[i] - b[i];
+            if (d) return d;
+        }
+        const int dsize = a.size() - b.size();
+        if (dsize) return dsize;
+
+        return 0;
+    });
+
+    std::vector<std::vector<unsigned int> > levels;
+#if 0
+    const queue = [0, 0, stacks.length - 1];
+
+    // Use a queue instead of recursion so that we don't hit max call stack limit.
+    while (queue.length) {
+        const right = queue.pop();
+        const left = queue.pop();
+        const level = queue.pop();
+
+        let i = left;
+
+        while (i <= right) {
+            const id = stacks[i][level];
+            if (id === undefined) {
+                i++;
+                continue;
+            }
+
+            // Find the range of adjacent blocks with the same name on the current stack level.
+            const start = i;
+            let hasChildren = false;
+            for (; i <= right && stacks[i][level] === id; i++) {
+                if (stacks[i].length > level + 1) hasChildren = true;
+            }
+            const end = i;
+
+            if (hasChildren) {
+                queue.unshift(level + 1, start, end - 1);
+            }
+
+            levels[level] = levels[level] || [];
+            levels[level].push(start, end - start, id);
+        }
+    }
+#endif
+    // Delta-encode bar positions for smaller output.
+    for (auto& level : levels) {
+        int prev = 0;
+        for (int i = 0, e = level.size(); i < e; i += 3) {
+            const int right = level[i] + level[i + 1];
+            level[i] -= prev;
+            prev = right;
+        }
+    }
+
+    QString profilingData;
+    QTextStream ts(&profilingData);
+    ts << "names = [ ";
+    if (names.size()) {
+        ts << "\"";
+        ts << names[0];
+	ts << "\"";
+    }
+    for (int i = 1, e = names.size(); i < e; i++) {
+        ts << ", \"";
+        ts << names[i];
+	ts << "\"";
+    }
+    ts << " ];\nlevels = [ ";
+    if (levels.size()) {
+        ts << "[ ";
+        const auto& level = levels[0];
+        if (level.size()) {
+            ts << level[0];
+        }
+        for (int j = 1, je = level.size(); j < je; j++) {
+            ts << ", ";
+            ts << level[j];
+        }
+        ts << " ]";
+    }
+    for (int i = 1, ie = levels.size(); i < ie; i++) {
+	ts << "[ ";
+        const auto& level = levels[i];
+	if (level.size()) {
+            ts << level[0];
+        }
+	for (int j = 1, je = level.size(); j < je; j++) {
+            ts << ", ";
+            ts << level[j];
+        }
+	ts << " ]";
+    } 
+    ts << " ];\nnumTicks = ";
+    ts << stacks.size();
+    ts << ";";
+
+    // Replace BIN_PLACEHOLDER with the profiling data.
+    index = index.replace(QStringLiteral("\\/\\* BIN_PLACEHOLDER \\*\\/"), profilingData);
+
+    QFile outFile(fileName);
+    if (outFile.open(QIODevice::WriteOnly)) {
+        QTextStream out(&outFile);
+	out << index;
+        outFile.close();
+    }
 }
 
 void FlameGraph::showData()

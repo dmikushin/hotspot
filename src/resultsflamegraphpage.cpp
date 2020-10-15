@@ -63,13 +63,15 @@ ResultsFlameGraphPage::ResultsFlameGraphPage(FilterAndZoomStack* filterStack, Pe
                 ui->flameGraph->setBottomUpData(data);
                 m_exportAction = exportMenu->addAction(QIcon::fromTheme(QStringLiteral("image-x-generic")), tr("Flamegraph"));
                 connect(m_exportAction, &QAction::triggered, this, [this]() {
-                    const auto filter = tr("Images (%1);;SVG (*.svg)").arg(imageFormatFilter());
+                    const auto filter = tr("Images (%1);;SVG (*.svg);;HTML (*.html)").arg(imageFormatFilter());
                     QString selectedFilter;
                     const auto fileName = QFileDialog::getSaveFileName(this, tr("Export Flamegraph"), {}, filter, &selectedFilter);
                     if (fileName.isEmpty())
                         return;
                     if (selectedFilter.contains(QStringLiteral("svg"))) {
                         ui->flameGraph->saveSvg(fileName);
+                    } else if (selectedFilter.contains(QStringLiteral("svg"))) {
+                        ui->flameGraph->saveHtml(fileName);
                     } else {
                         QImageWriter writer(fileName);
                         if (!writer.write(ui->flameGraph->toImage())) {
